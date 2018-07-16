@@ -118,21 +118,20 @@ server_loop(PIDList, Coord, Proxy) ->
             io:format("~n((~p))Server ~p died~n~p", [self(), Server, NewPIDList]),
 
             server_loop(NewPIDList, Coord, Proxy);
-        
-        {Proxy, {Client, client, Data}} ->
-            [Command, Filename] = re:split(Data, "#"),
-            io:fwrite("~p says do ~p ~p~n", [Client, Command, Filename]);
-            % case Command of
-            %     <<"commit">> ->
-            %         io:fwrite("~p says do ~p ~p~n", [Client, Command, Filename]);
-            %     <<"update">> ->
-            %         io:fwrite("~p says do ~p ~p~n", [Client, Command, Filename]);
-            %     <<"checkout">> ->
-            %         io:fwrite("~p says do ~p ~p~n", [Client, Command, Filename])
-            % end;
 
+        {Proxy, {Client, client, Data}} ->
+            [Command, Filename] = split_binary_to_atoms(Data, "#"),
+            io:fwrite("~p says do ~p ~p~n", [Client, Command, Filename]),
+            case Command of
+                commit ->
+                    io:fwrite("~p says do ~p ~p~n", [Client, Command, Filename]);
+                update ->
+                    io:fwrite("~p says do ~p ~p~n", [Client, Command, Filename]);
+                checkout ->
+                    io:fwrite("~p says do ~p ~p~n", [Client, Command, Filename])
+            end;
         Other ->
-            io:format("~n((~p))Received:~n~p~n",[self(),Other])    
+            io:format("~n((~p))Received:~n~p~n",[self(),Other])
     end,
     server_loop(PIDList, Coord, Proxy).
 
@@ -194,3 +193,18 @@ receive_oks(Msg, N) ->
 
 len([]) -> 0;
 len([_|T]) -> 1 + len(T).
+
+
+split_binary_to_atoms(Bin, [Char]) -> lists:map(fun(X) -> list_to_atom(X) end, split_list(binary_to_list(Bin), Char)).
+
+split_list([], _) -> [];
+split_list(L, X) ->
+    {Part, Rest} = get_list_part(L, X),
+    [Part | split_list(Rest, X)].
+
+get_list_part([], _) -> {[], []};
+get_list_part([X|T], X) -> {[] , T};
+get_list_part([Y|T], X) ->
+    {Part, Rest} = get_list_part(T, X),
+    {[Y|Part], Rest}.
+
