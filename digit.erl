@@ -84,17 +84,17 @@ server(Proxy_node) ->
         {ok, PIDList, Coord, Proxy} ->
             io:format("~n((~p))I'm a new server: ~n~p~nCoordinator:~p~n", [self(), PIDList, Coord]),
             lists:map (fun(PID) -> link(PID) end, PIDList),
-            server_loop(PIDList, Coord, Proxy);
+            server_loop(PIDList, Coord, Proxy, []);
         Other ->
             io:format("~n((~p))Received:~n~p~n",[self(), Other])
     end.
 
-server_loop(PIDList, Coord, Proxy) ->
+server_loop(PIDList, Coord, Proxy, State) ->
     receive
         {Proxy, Ref, {new_server, NewServer}} ->
             io:format("~n((~p))New server ~p~n~p~n",[self(), NewServer, [NewServer | PIDList]]),
             Proxy ! {ok, Ref},
-            server_loop([NewServer | PIDList], Coord, Proxy);
+            server_loop([NewServer | PIDList], Coord, Proxy, State);
 
         {'EXIT', Coord, _} ->
             NewPIDList = lists:delete(Coord, PIDList),
@@ -111,29 +111,38 @@ server_loop(PIDList, Coord, Proxy) ->
                    io:format("~n((~p))New Coordinator: ~p~n", [self(), NewCoord])
 
             end,
-            server_loop(NewPIDList, NewCoord, Proxy);
+            server_loop(NewPIDList, NewCoord, Proxy, State);
 
         {'EXIT', Server, _} ->
             NewPIDList = lists:delete(Server, PIDList),
             io:format("~n((~p))Server ~p died~n~p", [self(), Server, NewPIDList]),
 
-            server_loop(NewPIDList, Coord, Proxy);
+            server_loop(NewPIDList, Coord, Proxy, State);
+
+        {Coord, Ref, {commit, Filename, Ver}} ->
+            io:fwrite("commit ~p  ~p~n",[Filename, Ver]),
+            Coord ! {ok, Ref};
 
         {Proxy, {Client, client, Data}} ->
             [Command, Filename] = split_binary_to_atoms(Data, "#"),
-            io:fwrite("~p says do ~p ~p~n", [Client, Command, Filename]),
+
+            Ver = case lists:any(fun(X) -> case X of {Filename, _} -> true; _ -> false end end, State) of
+                            true -> L = lists:filter(fun(X) -> case X of {Filename, _} -> true; _ -> false end end, State),
+                                    lists:max(lists:map(fun({_, V}) -> V end, L));
+                            false -> -1
+                        end,
+
             case Command of
-                commit ->
-                    io:fwrite("~p says do ~p ~p~n", [Client, Command, Filename]);
-                update ->
-                    io:fwrite("~p says do ~p ~p~n", [Client, Command, Filename]);
-                checkout ->
-                    io:fwrite("~p says do ~p ~p~n", [Client, Command, Filename])
+                commit -> io:fwrite("~p says do ~p ~p  ~p~n", [Client, Command, Filename, Ver]),
+                          multicast(PIDList -- [Coord], {commit, Filename, Ver+1}),
+                          Proxy ! {commitok, Ver, Filename, Client};
+                checkout -> Proxy ! {checkoutok, Ver, Filename, Client},
+                            io:fwrite("~p says do ~p ~p  ~p~n", [Client, Command, Filename, Ver])
             end;
         Other ->
             io:format("~n((~p))Received:~n~p~n",[self(),Other])
     end,
-    server_loop(PIDList, Coord, Proxy).
+    server_loop(PIDList, Coord, Proxy, State).
 
 
 
@@ -151,14 +160,11 @@ client_loop(Socket) ->
             checkout when Filename =/= [] ->
                 gen_tcp:send(Socket,["checkout#", Filename]);
 
-            update when Filename =/= [] ->
-                gen_tcp:send(Socket,["update#", Filename]);
 
             _ ->
                 io:fwrite("Invalid expression. Use:~n"),
                 io:fwrite(" commit [filename]~n"),
                 io:fwrite(" checkout [filename]~n"),
-                io:fwrite(" update [filename]~n"),
                 client_loop(Socket)
         end,
     receive
@@ -174,6 +180,7 @@ client_loop(Socket) ->
 
 %%%% OTHER %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 multicast(PIDList, Msg) ->
+    io:fwrite("multicasting ~p  ~p~n", [Msg, PIDList]),
     Ref = erlang:make_ref(),
     lists:map (fun(PID) -> PID ! {self(), Ref, Msg} end, PIDList),
     Length = len(PIDList),
@@ -181,14 +188,15 @@ multicast(PIDList, Msg) ->
 
 %% TODO
 receive_oks(_, 0) -> ok;
-receive_oks(Msg, N) ->
+receive_oks(Ref, N) ->
+    io:fwrite("quiero dormir~n"),
     receive
-        {ok, Msg} ->
+        {ok, Ref} ->
             ok
     after infinity ->
         ok % TODO
     end,
-    receive_oks(Msg, N-1).
+    receive_oks(Ref, N-1).
 
 
 len([]) -> 0;
