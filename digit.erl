@@ -53,6 +53,7 @@ proxy_loop(PIDList, Coord) ->
             proxy_loop(NewPIDList, Coord);
 
 
+
         Other ->
             io:format("((~p))Received:~n~p~n",[self(), Other])
     end,
@@ -69,8 +70,11 @@ clienthandlerloop(Socket, Master) ->
     receive
         {tcp, Socket, Data} ->
             io:fwrite("~p ~p~n",[Socket, Data]),
-            Master ! {self(), client, Data},
-            gen_tcp:send(Socket,[<<"ok">>]);
+            Master ! {self(), client, Data};
+
+        {commitok, Ver, Filename} ->
+            gen_tcp:send(Socket, [integer_to_binary(Ver)]);
+
         Weird ->
             io:fwrite("received unexpected message: ~p~n",[Weird])
     end,
@@ -121,7 +125,9 @@ server_loop(PIDList, Coord, Proxy, State) ->
 
         {Coord, Ref, {commit, Filename, Ver}} ->
             io:fwrite("commit ~p  ~p~n",[Filename, Ver]),
-            Coord ! {ok, Ref};
+            NewState = [{Filename, Ver+1} | State],
+            Coord ! {ok, Ref},
+            server_loop(PIDList, Coord, Proxy, NewState);
 
         {Proxy, {Client, client, Data}} ->
             [Command, Filename] = split_binary_to_atoms(Data, "#"),
@@ -135,7 +141,9 @@ server_loop(PIDList, Coord, Proxy, State) ->
             case Command of
                 commit -> io:fwrite("~p says do ~p ~p  ~p~n", [Client, Command, Filename, Ver]),
                           multicast(PIDList -- [Coord], {commit, Filename, Ver+1}),
-                          Proxy ! {commitok, Ver, Filename, Client};
+                          Client ! {commitok, Ver+1, Filename},
+                          NewState = [{Filename, Ver+1} | State],
+                          server_loop(PIDList, Coord, Proxy, NewState);
                 checkout -> Proxy ! {checkoutok, Ver, Filename, Client},
                             io:fwrite("~p says do ~p ~p  ~p~n", [Client, Command, Filename, Ver])
             end;
@@ -172,7 +180,7 @@ client_loop(Socket) ->
             io:fwrite("~p ~s~n",[Socket, Data]);
 
         Message ->
-            Message
+            io:fwrite("~p", [Message])
 
     end,
     client_loop(Socket).
