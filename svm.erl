@@ -1,4 +1,4 @@
--module(digit).
+-module(svm).
 -compile(export_all).
 
 
@@ -33,8 +33,10 @@ proxy_loop(PIDList, Coord) ->
             proxy_loop(NewPIDList, NewCoord);
         {'EXIT', Coord, _} ->
             NewPIDList = lists:delete(Coord, PIDList),
-            NewCoord = lists:max(NewPIDList),
             io:format("~n((~p))Coordinator ~p died~n~p~n", [self(), Coord, NewPIDList]),
+            NewCoord = if NewPIDList =/= [] -> lists:max(NewPIDList);
+                          NewPIDList =:= [] -> proxy_loop(NewPIDList, 0)
+                       end,
             Length = len(NewPIDList),
             receive_oks({coord_change, Coord, NewCoord}, Length),
             NewCoord ! {self(), you_are_the_one},
@@ -72,7 +74,7 @@ clienthandlerloop(Socket, Master) ->
             io:fwrite("~p ~p~n",[Socket, Data]),
             Master ! {self(), client, Data};
 
-        {commitok, Ver, Filename} ->
+        {commitok, Ver, _} ->
             gen_tcp:send(Socket, [integer_to_binary(Ver)]);
 
         Weird ->
@@ -88,7 +90,15 @@ server(Proxy_node) ->
         {ok, PIDList, Coord, Proxy} ->
             io:format("~n((~p))I'm a new server: ~n~p~nCoordinator:~p~n", [self(), PIDList, Coord]),
             lists:map (fun(PID) -> link(PID) end, PIDList),
-            server_loop(PIDList, Coord, Proxy, []);
+            State = if Coord =/= self() ->
+                            Coord ! {self(), need_state},
+                            receive
+                                {Coord, need_state, CoordState} -> CoordState
+                            end;
+                       Coord =:= self() ->
+                           []
+                    end,
+            server_loop(PIDList, Coord, Proxy, State);
         Other ->
             io:format("~n((~p))Received:~n~p~n",[self(), Other])
     end.
@@ -123,9 +133,13 @@ server_loop(PIDList, Coord, Proxy, State) ->
 
             server_loop(NewPIDList, Coord, Proxy, State);
 
+        {From, need_state} ->
+            From ! {self(), need_state, State},
+            server_loop(PIDList, Coord, Proxy, State);
+
         {Coord, Ref, {commit, Filename, Ver}} ->
             io:fwrite("commit ~p  ~p~n",[Filename, Ver]),
-            NewState = [{Filename, Ver+1} | State],
+            NewState = [{Filename, Ver} | State],
             Coord ! {ok, Ref},
             server_loop(PIDList, Coord, Proxy, NewState);
 
@@ -197,7 +211,6 @@ multicast(PIDList, Msg) ->
 %% TODO
 receive_oks(_, 0) -> ok;
 receive_oks(Ref, N) ->
-    io:fwrite("quiero dormir~n"),
     receive
         {ok, Ref} ->
             ok
